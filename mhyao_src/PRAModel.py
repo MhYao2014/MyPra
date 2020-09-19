@@ -36,17 +36,26 @@ class PRAModelWrapper(ModelWrapper):
     def rank_score(self,
                    head_mid: str,
                    relation: str,
-                   tail_mid: str):
-        entity_pairs_1 = [[head_mid, tail_mid, 1]]
+                   tail_mid_list: list):
+        entity_pairs_1 = []
+        for tail_mid in tail_mid_list:
+            entity_pairs_1.append([head_mid, tail_mid, 1])
         feature = GetFeature(tuple_data=self.query_graph_pt.fact_list,
                              entity_pairs=entity_pairs_1,
                              metapath=self.query_graph_pt.relation_meta_paths[relation])
         data_feature = feature.get_probs()
-        py_feature = data_feature[(head_mid, tail_mid)][1:]
+        tail_idx_dict = {}
+        results_dict = {}
+        py_feature = []
+        for id, (_, tail_mid) in enumerate(data_feature.keys()):
+            tail_idx_dict[tail_mid] = id
+            py_feature.append(data_feature[(head_mid, tail_mid)][1:])
         torch_feature = torch.tensor(data=py_feature,
                                      dtype=torch.float32)
-        result = self.relation_torch_model_dict[relation].forward(torch_feature)
-        return result
+        results = self.relation_torch_model_dict[relation].forward(torch_feature)
+        for tail_mid in tail_idx_dict.keys():
+            results_dict[tail_mid] = results[tail_idx_dict[tail_mid]]
+        return results_dict
 
 
 class MyModel(nn.Module):

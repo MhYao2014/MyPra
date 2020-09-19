@@ -24,8 +24,7 @@ class GraphExperiments:
                  query_graph_pt: ProcessedGraphManager,
                  predict_graph_pt: ProcessedGraphManager = None,
                  model_pt: PRAModelWrapper = None,
-                 hit_range: int = 10,
-                 poor_relation_set: list = None):
+                 hit_range: int = 10):
         self.query_graph_pt = query_graph_pt
         self.predict_graph_pt = predict_graph_pt
         self.model_pt = model_pt
@@ -33,72 +32,21 @@ class GraphExperiments:
         self.hit_percent = None
         self.MR = None
         self.MRR = None
-        self.poor_relation_set = poor_relation_set
-        
-    def get_batch_tail_score(self, triple, batch_entity):
-        print(f'I am here 38')
-        entity_rank_dict = {}
-        for entity in tqdm(batch_entity):
-            score = self.model_pt.rank_score(head_mid=triple[0],
-                                             relation=triple[2],
-                                             tail_mid=entity)
-            entity_rank_dict[(triple[0], triple[1], entity)] = score
-        return entity_rank_dict
-    
-    
-    def tail_predict(self):
+
+    def parallel_among_fact_list(self, part_of_fact_list):
         hits = 0
         mr = 0
         mrr = 0
-        poor_count = 0
-        process_num = 10
-        batch_query_entity_len = len(self.query_graph_pt.entity_set) // process_num
-        '''
-        batch_predict_entity_len = len(self.predict_graph_pt.fact_list) // process_num
-        predcit_pool = Pool(processes=process_num)
-        for i in range(processes=process_num):
-            if i == process_num - 1:
-                batch_triple = self.predict_graph_pt.fact_list[i*batch_predict_entity_len:]
-            else:
-                batch_triple = self.predict_graph_pt.fact_list[i*batch_predict_entity_len:(i+1)*batch_predict_entity_len-1]
-        '''    
-        #print(f"I am here 62 line!!!!!!!!!")
-
-        
-        
-        for triple in tqdm(self.predict_graph_pt.fact_list):
-            if triple[2] in self.poor_relation_set:
-                poor_count += 1
+        bad_relation_count = 0
+        for triple in tqdm(part_of_fact_list):
+            if triple[2] not in self.model_pt.relation_torch_model_dict:
+                bad_relation_count += 1
                 continue
             else:
-                entity_rank_dict = {}
-                #print(f"I am here 69 line!!!!!!!!!")
-                '''
-                with concurrent.futures.ProcessPoolExecutor() as executor:
-                    print(f"I am here 69 line!!!!!!!!!")
-                    entity_rank_dict.update(executor.map(get_batch_tail_score, args=(triple,
-                                                                                     self.query_graph_pt.entity_set)))
-                '''    
-                query_pool = Pool(processes=process_num)
-                entity_list = list(self.query_graph_pt.entity_set)
-                for i in range(process_num):
-                    #print(f"I am here 72!!!!!!!!!")
-                    if i == process_num - 1:
-                        batch_entity = entity_list[i*batch_query_entity_len:]
-                    else:
-                        #print(f"I am here 76!!!!!!!!!")
-                        batch_entity = entity_list[i*batch_query_entity_len:(i+1)*batch_query_entity_len-1]
-                    #print(f"I am here 78!!!!!!!!!")
-                    entity_rank_dict.update(query_pool.apply_async(get_batch_tail_score,
-                                                                   args=(self,
-                                                                         triple, 
-                                                                         batch_entity)))
-                print(f"I am here 81!!!!!!!!!")
-                query_pool.close()
-                query_pool.join()
-                pdb.set_trace()
-                
-               
+                tail_mid_list = list(self.query_graph_pt.entity_set)
+                entity_rank_dict = self.model_pt.rank_score(head_mid=triple[0],
+                                                            relation=triple[2],
+                                                            tail_mid_list=tail_mid_list)
                 rank_tail_sorted = sorted(entity_rank_dict.items(), key=lambda item: item[1], reverse=False)
                 for rank, (tail, score) in enumerate(rank_tail_sorted):
                     if triple[2] == tail:
@@ -107,9 +55,32 @@ class GraphExperiments:
                         mr += rank
                         mrr += 1 / rank
                         break
-        self.hit_percent = hits / (len(self.predict_graph_pt.fact_list) - poor_count)
-        self.MR = mr / (len(self.predict_graph_pt.fact_list) - poor_count)
-        self.MRR = mrr / (len(self.predict_graph_pt.fact_list) - poor_count)
+        return hits, mr, mrr, bad_relation_count
+
+    def tail_predict(self):
+        process_num = 5
+        process_pool = Pool(processes=process_num)
+        hit_mr_mrr_results_list = []
+        batch_size = len(self.predict_graph_pt.fact_list) // process_num
+        for batch_id in range(process_num):
+            last_fact_idx = min((batch_id+1)*batch_size, len(self.predict_graph_pt.fact_list))
+            part_of_fact_lists = self.predict_graph_pt.fact_list[batch_id*batch_size:last_fact_idx]
+            hit_mr_mrr_results_list.append(process_pool.apply_async(func=self.parallel_among_fact_list,
+                                                                    args=(part_of_fact_lists,)).get())
+        process_pool.close()
+        process_pool.join()
+        hits = 0
+        mr = 0
+        mrr = 0
+        bad_relation_count = 0
+        for (tmp_hits, tmp_mr, tmp_mrr, tmp_bad_relation_count) in hit_mr_mrr_results_list:
+            hits += tmp_hits
+            mr += tmp_mr
+            mrr += tmp_mrr
+            bad_relation_count += tmp_bad_relation_count
+        self.hit_percent = hits / (len(self.predict_graph_pt.fact_list) - bad_relation_count)
+        self.MR = mr / (len(self.predict_graph_pt.fact_list) - bad_relation_count)
+        self.MRR = mrr / (len(self.predict_graph_pt.fact_list) - bad_relation_count)
         return self.hit_percent, self.MR, self.MRR
 
 
@@ -118,12 +89,10 @@ class Validation(GraphExperiments):
                  model_pt: PRAModelWrapper,
                  query_graph_pt: ProcessedGraphManager,
                  predict_graph_pt: ProcessedGraphManager,
-                 hit_range,
-                 poor_relation_set):
+                 hit_range):
         super().__init__(model_pt=model_pt,
                          query_graph_pt=query_graph_pt,
-                         predict_graph_pt=predict_graph_pt,
-                         poor_relation_set=poor_relation_set)
+                         predict_graph_pt=predict_graph_pt)
         self.hit_range = hit_range
 
 
@@ -132,12 +101,10 @@ class Test(GraphExperiments):
                  query_graph_pt: ProcessedGraphManager,
                  predict_graph_pt: ProcessedGraphManager,
                  hit_range,
-                 model_pt: LogisticRegression = None,
-                 poor_relation_set=None):
+                 model_pt: LogisticRegression = None):
         super().__init__(model_pt=model_pt,
                          query_graph_pt=query_graph_pt,
-                         predict_graph_pt=predict_graph_pt,
-                         poor_relation_set=poor_relation_set)
+                         predict_graph_pt=predict_graph_pt)
         self.hit_range = hit_range
 
     def find_best_results(self,
@@ -159,7 +126,6 @@ class PRATrain(GraphExperiments):
         self.alpha = hyper_param
         self.neg_pairs_path = neg_pairs_path
         self.model_pt = PRAModelWrapper(query_graph_pt=self.query_graph_pt)
-        self.poor_relation_set = []
 
     def get_relation_paths(self):
         self.relation_meta_paths = defaultdict(list)
@@ -187,27 +153,28 @@ class PRATrain(GraphExperiments):
         relation_count = 0
         for relation in self.query_graph_pt.relation_set:
             relation_count += 1
-            #print(f"预测关系:{relation};")
-            relation_pos_pairs = self.query_graph_pt.relation_pos_sample_dict[relation]
-            train_pairs_01 = []
-            pos_pairs_num = len(relation_pos_pairs)
-            random_num = 3 + random.random()
-            sample_num = int(pos_pairs_num * random_num)
-            if sample_num > len(neg_pairs):
-                sample_num = len(neg_pairs)
-            neg_pairs_01 = random.sample(neg_pairs, sample_num)
-            for item in relation_pos_pairs:
-                e1, e2 = item
-                train_pairs_01.append([e1, e2, 1])
-            for item in neg_pairs_01:
-                e1, e2, _ = item
-                train_pairs_01.append([e1, e2, 0])
-            if hold_out_id is not None and hold_out_id == 0:  # 只有主进程输出信息
-                print(f"预测关系:{relation}, 是第:{relation_count}个关系, 该关系数据数量:{len(train_pairs_01)}")
+            # 若关系没有对应的metapath,那么就忽略这个关系,不为其生成对应模型
             if relation not in self.relation_meta_paths.keys():
-                self.poor_relation_set.append(relation)
                 continue
             else:
+                # 生成正负样本
+                relation_pos_pairs = self.query_graph_pt.relation_pos_sample_dict[relation]
+                train_pairs_01 = []
+                pos_pairs_num = len(relation_pos_pairs)
+                random_num = 3 + random.random()
+                sample_num = int(pos_pairs_num * random_num)
+                if sample_num > len(neg_pairs):
+                    sample_num = len(neg_pairs)
+                neg_pairs_01 = random.sample(neg_pairs, sample_num)
+                for item in relation_pos_pairs:
+                    e1, e2 = item
+                    train_pairs_01.append([e1, e2, 1])
+                for item in neg_pairs_01:
+                    e1, e2, _ = item
+                    train_pairs_01.append([e1, e2, 0])
+                if hold_out_id is not None and hold_out_id == 0:  # 只有主进程输出信息
+                    print(f"预测关系:{relation}, 是第:{relation_count}个关系, 该关系数据数量:{len(train_pairs_01)}")
+                # 生成样本特征
                 feature = GetFeature(tuple_data=self.query_graph_pt.fact_list,
                                  entity_pairs=train_pairs_01,
                                  metapath=self.relation_meta_paths[relation])
@@ -241,4 +208,3 @@ class PRATrain(GraphExperiments):
                         os.makedirs(model_save_path)
                     model_save_path = model_save_path / (relation.replace("/", '') + f"_{self.alpha}_model.pkl")
                     torch.save(self.model_pt.relation_torch_model_dict[relation].state_dict(), model_save_path)
-        return self.poor_relation_set

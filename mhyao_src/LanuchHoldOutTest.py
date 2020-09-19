@@ -1,10 +1,10 @@
 import pdb
-import os
+import os, sys
 from pathlib import Path
 from GraphManager import ProcessedGraphManager
 from Experiments import PRATrain, Validation, Test
-#from multiprocessing import Pool
-from MyPool import MyPool, hand_error
+from multiprocessing import Pool
+from MyPool import MyPool, handle_error
 import traceback
 
 
@@ -24,6 +24,7 @@ def one_hold_out_experiment(hold_out_id: int,
         if len(graph_valid.entity_set_difference(graph_train)) != 0 and hold_out_id == 0: # 只有主进程输出信息
             print(f"There are {len(graph_valid.entity_set_difference(graph_train))}"
                   f"entities that are missing in the training dataset.")
+            sys.stdout.flush()
         # 载入可能的超参数
         # alpha_grid = [0.1, 0.2, 0.25, 0.3, 0.35]
         alpha_grid = [0.2]
@@ -34,16 +35,16 @@ def one_hold_out_experiment(hold_out_id: int,
                                                meta_path_file=hold_out_fold_path / "train.MetaPaths",
                                                hold_out_path=hold_out_fold_path,
                                                hyper_param=alpha)
-            poor_relation_set = one_hold_out_experiment.train_this_hold_out(if_save_model=False, hold_out_id=hold_out_id)
+            one_hold_out_experiment.train_this_hold_out(if_save_model=False, hold_out_id=hold_out_id)
             valid_experiment = Validation(model_pt=one_hold_out_experiment.model_pt,
                                           query_graph_pt=graph_train,
                                           predict_graph_pt=graph_valid,
-                                          hit_range=hit_range,
-                                          poor_relation_set=poor_relation_set)
+                                          hit_range=hit_range)
             result_tuple = valid_experiment.tail_predict()
-            if hold_out_id == 0: # 只有主进程输出信息
+            if hold_out_id == 0:  # 只有主进程输出信息
                 print(f"Validating hyper-parameter [{id/len(alpha_grid)}]: "
                       f"\thit@{hit_range}'s accuracy; MR; MRR: {result_tuple}.")
+                sys.stdout.flush()
             valid_results.append((id, result_tuple))
         test_file_name = name + "." + str(hold_out_id) + "." + files_suffix[2] + "." + "graph"
         graph_test = ProcessedGraphManager(file_path=hold_out_fold_path / test_file_name,
@@ -64,9 +65,11 @@ def one_hold_out_experiment(hold_out_id: int,
         if hold_out_id == 0: # 只有主进程输出信息
             print(f"Hold Out {hold_out_id} Test Result:\n"
                   f"\thit@{hit_range}'s accuracy; MR; MRR: {test_result_tuple}.")
+            sys.stdout.flush()
         result_save_path = hold_out_fold_path / "result.txt"
         with open(result_save_path, "w") as f:
             f.write(f"hit@{hit_range}'s accuracy; MR; MRR: {test_result_tuple}")
+            sys.stdout.flush()
     except:
         stack_error = traceback.format_exc()
         raise Exception(stack_error)
@@ -80,7 +83,7 @@ if __name__ == "__main__":
     processed_path = Path("../DATA/processed/fb15k237/test_case") # 做测试代码时使用
     hold_out_fold = "hold_out_"
     files_suffix = ["train", "valid", "test"]
-    split_k = 10
+    split_k = 2
     hit_range = 10
     for name in graph_names:
         process_pool = MyPool(processes=split_k)
