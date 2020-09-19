@@ -161,7 +161,10 @@ class PRATrain(GraphExperiments):
                 relation_pos_pairs = self.query_graph_pt.relation_pos_sample_dict[relation]
                 train_pairs_01 = []
                 pos_pairs_num = len(relation_pos_pairs)
-                random_num = 3 + random.random()
+                if pos_pairs_num >= 4000:
+                    relation_pos_pairs = relation_pos_pairs[0:5000]
+                pos_pairs_num = len(relation_pos_pairs)
+                random_num = 1 + random.random()
                 sample_num = int(pos_pairs_num * random_num)
                 if sample_num > len(neg_pairs):
                     sample_num = len(neg_pairs)
